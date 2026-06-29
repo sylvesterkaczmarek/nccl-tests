@@ -567,8 +567,10 @@ testResult_t BenchTime(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
     TESTCHECK(args->collTest->initData(args, type, op, root, 99, in_place));
   }
 
-  // Sync
-  TESTCHECK(startColl(args, type, op, root, in_place, 0));
+  // Warm-up immediately after data initialization
+  for (int iter = 0; iter < warmup_iters; iter++) {
+    TESTCHECK(startColl(args, type, op, root, in_place, iter));
+  }
   TESTCHECK(completeColl(args));
 
   Barrier(args);
@@ -730,15 +732,6 @@ testResult_t TimeTest(struct threadArgs* args, ncclDataType_t type, const char* 
   for (int i = 0; i < args->nGpus; i++) {
     args->sendbuffs[i] = (char*)args->sendbuffs[i] + unalign * wordSize(type);
     args->recvbuffs[i] = (char*)args->recvbuffs[i] + unalign * wordSize(type);
-  }
-
-  // Warm-up for all sizes (using a stepfactor of 2)
-  for (size_t size = args->minbytes; size <= args->maxbytes; size = size * 2) {
-    setupArgs(size, type, args);
-    for (int iter = 0; iter < warmup_iters; iter++) {
-      TESTCHECK(startColl(args, type, op, root, 0, iter));
-    }
-    TESTCHECK(completeColl(args));
   }
 
   // Benchmark
