@@ -52,7 +52,7 @@ See the [Performance](doc/PERFORMANCE.md) page for explanation about numbers, an
 
 ### Arguments
 
-All tests support the same set of arguments :
+Collective perf tests support the same set of arguments :
 
 * Number of GPUs
   * `-t,--nthreads <num threads>` number of threads per process. Default : 1.
@@ -116,6 +116,18 @@ Here are a few examples:
 - `NCCL_TESTS_SPLIT="AND 0x1"` or `NCCL_TESTS_SPLIT="MOD 2"`: Run two operations, each operation using every other rank.
 
 Note that the reported bandwidth is per group, hence to get the total bandwidth used by all groups, one must multiply by the number of groups.
+
+### Communicator operations (`comm_ops_perf`)
+
+Benchmarks NCCL communicator init, split, shrink, and grow latency. Requires `MPI=1`; does not use the collective arguments above.
+
+```shell
+$ mpirun -np 8 ./build/comm_ops_perf init
+$ mpirun -np 8 ./build/comm_ops_perf split --sweep-comms fixed
+$ mpirun -np 8 ./build/comm_ops_perf grow --resize factor-1.5
+```
+
+Pass a test mode (`init`, `split`, `shrink`, or `grow`) followed by options such as `-i` (timed iterations), `-w` (untimed warmup iterations), `-s` / `-b` / `-e` (comm-size sweep), `-r` (resize for split/shrink/grow), `-S` (share resources), and `-a` (abort path). Output is per-operation latency summaries in ms; use `--help` for details.
 
 ## Copyright
 
