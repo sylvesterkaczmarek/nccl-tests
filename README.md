@@ -103,6 +103,7 @@ Collective perf tests support the same set of arguments :
   * `-T,--timeout <time in seconds>` timeout each test after specified number of seconds. Default : disabled.
   * `-M,--memory <0/1>` enable memory usage report. Default : 0.
   * `-u,--unalign <index of first element>` Misalign source and destination buffers. Default : 0.
+  * `-U,--tuning <0/1>` report NCCL tuning information. Requires NCCL 2.28 or newer; symmetric collective identification and kernel variant reporting require NCCL 2.31 or newer. Default : 0.
 
 ### Running multiple operations in parallel
 

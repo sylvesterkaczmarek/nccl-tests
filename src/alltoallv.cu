@@ -122,7 +122,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define PRINT if (is_main_thread) printf
+#define PRINT(...) \
+  do { \
+    if (is_main_thread) printf(__VA_ARGS__); \
+  } while (0)
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
