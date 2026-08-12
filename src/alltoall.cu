@@ -310,6 +310,54 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, nc
 #endif
 #endif
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,0)
+testResult_t AlltoAllRmaPut(void* sendWindow, size_t sendoffset, void* recvWindow, size_t recvoffset,
+                            size_t count, ncclDataType_t type, ncclComm_t comm, cudaStream_t stream) {
+  int rank, nranks;
+  NCCLCHECK(ncclCommUserRank(comm, &rank));
+  NCCLCHECK(ncclCommCount(comm, &nranks));
+
+  ncclWindow_t sendWin = (ncclWindow_t)sendWindow;
+  ncclWindow_t recvWin = (ncclWindow_t)recvWindow;
+
+  void* sendPtr = NULL;
+  void* recvPtr = NULL;
+  NCCLCHECK(ncclWinGetUserPtr(comm, sendWin, &sendPtr));
+  NCCLCHECK(ncclWinGetUserPtr(comm, recvWin, &recvPtr));
+
+  size_t eltSize = wordSize(type);
+  size_t chunkBytes = count * eltSize;
+  const int nctx = rmaCtxCount;
+
+  ncclWaitSignalDesc_t* waitDescs = (ncclWaitSignalDesc_t*)malloc(sizeof(ncclWaitSignalDesc_t) * nranks);
+  if (waitDescs == NULL) {
+    return testInternalError;
+  }
+
+  for (int i = 0; i < nranks; i++) {
+    waitDescs[i].opCnt = 1;
+    waitDescs[i].peer = i;
+    waitDescs[i].sigIdx = i % NUM_RMA_SIG;
+    waitDescs[i].ctx = (i + rank) % nctx;
+  }
+
+  NCCLCHECK(ncclGroupStart());
+  for (int peer = 0; peer < nranks; peer++) {
+    int targetRank = (rank + peer) % nranks;
+    void* srcPtr = (char*)sendPtr + sendoffset + targetRank * chunkBytes;
+    size_t dstOffset = recvoffset + rank * chunkBytes;
+
+    NCCLCHECK(ncclPutSignal(srcPtr, count, type, targetRank,
+                      recvWin, dstOffset, rank % NUM_RMA_SIG, (rank + targetRank) % nctx, 0, comm, stream));
+  }
+  NCCLCHECK(ncclGroupEnd());
+
+  NCCLCHECK(ncclWaitSignal(nranks, waitDescs, comm, stream));
+  free(waitDescs);
+  return testSuccess;
+}
+#endif
+
 testResult_t AlltoAllRunColl(void* sendbuff, size_t sendoffset, void* recvbuff, size_t recvoffset, size_t count, ncclDataType_t type, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream, int deviceImpl) {
   if (deviceImpl == 0) {
     char* sptr = (char*)sendbuff + sendoffset;
@@ -337,6 +385,11 @@ testResult_t AlltoAllRunColl(void* sendbuff, size_t sendoffset, void* recvbuff, 
 #endif
   } else {
     switch(deviceImpl) {
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,0)
+      case HOST_RMA_IMPL:
+        TESTCHECK(AlltoAllRmaPut(sendbuff, sendoffset, recvbuff, recvoffset, count, type, comm, stream));
+        return testSuccess;
+#endif
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,28,0)
       case 1:
         TESTCHECK(testLaunchDeviceKernel(SPECIALIZE_KERNEL(NvlAlltoAllKernel, type, op), sendbuff, sendoffset, recvbuff, recvoffset, count, type, op, root, comm, stream));

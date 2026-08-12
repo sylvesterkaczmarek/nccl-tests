@@ -26,6 +26,20 @@
 // For nccl.h < 2.13 since we define a weak fallback
 extern "C" char const* ncclGetLastError(ncclComm_t comm);
 
+#define HOST_RMA_IMPL 10
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,4)
+#define NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY 1
+#else
+#define NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY 0
+#endif
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,31,0)
+#define NUM_RMA_SIG 4
+#else
+#define NUM_RMA_SIG 1
+#endif
+
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
   if( err != cudaSuccess ) {                        \
@@ -267,6 +281,7 @@ static size_t wordSize(ncclDataType_t type) {
 
 extern int test_ncclVersion; // init'd with ncclGetVersion()
 extern int deviceCtaCount; // number of CTAs for device implementation
+extern int rmaCtxCount; // number of RMA contexts to provision for host RMA (-H)
 constexpr int test_opNumMax = (int)ncclNumOps + (NCCL_VERSION_CODE >= NCCL_VERSION(2,11,0) ? 1 : 0);
 extern int test_opnum;
 extern int test_typenum;

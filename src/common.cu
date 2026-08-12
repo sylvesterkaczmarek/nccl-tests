@@ -111,10 +111,12 @@ int cudaGraphLaunches = 0;
 static int report_cputime = 0;
 static int report_timestamps = 0;
 static int deviceImpl = 0;
+static int hostRmaImpl = 0;
 int unalign = 0;
 int memory_report = 0;
 
 int deviceCtaCount = 16; // Default number of CTAs for device implementation
+int rmaCtxCount = 1;     // Number of RMA contexts to provision for host RMA (-H)
 
 // Report average iteration time: (0=RANK0,1=AVG,2=MIN,3=MAX)
 static int average = 1;
@@ -204,6 +206,12 @@ testResult_t initComms(ncclComm_t* comms, int nComms, int firstRank, int nRanks,
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,28,0)
   config.nvlinkCentricSched = 1;
 #endif
+#endif
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,31,0)
+  if (hostRmaImpl) {
+    config.numRmaCtx = rmaCtxCount;
+    config.numRmaSig = NUM_RMA_SIG;
+  }
 #endif
   if (ncclTestEngine.initCommConfig)
     ncclTestEngine.initCommConfig(&config);
@@ -593,6 +601,17 @@ testResult_t startColl(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
     }
     #endif
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,0)
+    if (hostRmaImpl) {
+      void* sendwin = args->sendRegHandles[i];
+      void* recvwin = args->recvRegHandles[i];
+      CUDACHECK(cudaSetDevice(args->gpus[i]));
+      TESTCHECK(args->collTest->runColl(
+            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0),
+            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0),
+            count, type, op, root, args->comms[i], args->streams[i], HOST_RMA_IMPL));
+    } else
+#endif
     if (deviceImpl == 0) {
       TESTCHECK(args->collTest->runColl(
             (void*)(in_place ? recvBuff : sendBuff), in_place ? args->sendInplaceOffset*rank : 0,
@@ -604,8 +623,8 @@ testResult_t startColl(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
       void* recvwin = args->recvRegHandles[i];
       CUDACHECK(cudaSetDevice(args->gpus[i]));
       TESTCHECK(args->collTest->runColl(
-            (void*)(in_place ? recvwin : sendwin), shift + in_place ? args->sendInplaceOffset*rank : 0,
-            (void*)recvwin, shift + in_place ? args->recvInplaceOffset*rank : 0,
+            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0),
+            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0),
             count, type, op, root, (ncclComm_t)(args->devComms+i), args->streams[i], deviceImpl));
 #endif
     }
@@ -1032,6 +1051,16 @@ testResult_t threadInit(struct threadArgs* args) {
   }
   NCCLCHECK(ncclGroupEnd());
 #endif
+#if NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY
+  if (hostRmaImpl) {
+    ncclCommProperties_t commProperties = NCCL_COMM_PROPERTIES_INITIALIZER;
+    NCCLCHECK(ncclCommQueryProperties(args->comms[0], &commProperties));
+    if (!commProperties.hostRmaSupport) {
+      fprintf(stderr, "Host RMA is not supported on this system\n");
+      return testInvalidUsage;
+    }
+  }
+#endif
   // Capture memory used by test buffers
   for (int g = 0; g < args->nGpus; ++g) {
     CUDACHECK(cudaSetDevice(args->gpus[g]));
@@ -1196,13 +1225,14 @@ int main(int argc, char* argv[], char **envp) {
     {"unalign", required_argument, 0, 'u'},
     {"per_iter_timing", required_argument, 0, 'I'},
     {"per_iter_skip", required_argument, 0, 'K'},
+    {"host_rma_implementation", required_argument, 0, 'H'},
     {"help", no_argument, 0, 'h'},
     {}
   };
 
   while(1) {
     int c;
-    c = getopt_long(argc, argv, "t:g:b:e:i:f:n:m:w:N:p:I:K:c:o:d:r:z:y:T:hG:C:a:R:x:D:V:J:S:M:u:", longopts, &longindex);
+    c = getopt_long(argc, argv, "t:g:b:e:i:f:n:m:w:N:p:I:K:c:o:d:r:z:y:T:hG:C:a:R:x:D:V:J:S:M:u:H:", longopts, &longindex);
 
     if (c == -1)
       break;
@@ -1355,6 +1385,25 @@ int main(int argc, char* argv[], char **envp) {
       case 'u':
         unalign = (int)strtol(optarg, NULL, 0);
         break;
+      case 'H':
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,0)
+        if (test_ncclVersion >= NCCL_VERSION(2,29,0)) {
+          char* endptr = NULL;
+          hostRmaImpl = 1;
+          rmaCtxCount = (int)strtol(optarg, &endptr, 0);
+          if (*endptr != '\0' || rmaCtxCount < 1) {
+            fprintf(stderr, "Option -H (host RMA implementation) takes a positive number of RMA contexts, got '%s'\n", optarg);
+            return -1;
+          }
+        } else {
+          fprintf(stderr, "Option -H (host RMA implementation) requires NCCL >= 2.29.0\n");
+          return -1;
+        }
+#else
+        fprintf(stderr, "Option -H (host RMA implementation) requires nccl-tests to be compiled with NCCL >= 2.29.0\n");
+        return -1;
+#endif
+        break;
       case 'h':
       default:
         if (c != 'h') printf("invalid option '%c'\n", c);
@@ -1392,6 +1441,8 @@ int main(int argc, char* argv[], char **envp) {
             "[-x,--cta_policy <0/1/2> set CTA policy (NCCL_CTA_POLICY_DEFAULT (0), NCCL_CTA_POLICY_EFFICIENCY (1), NCCL_CTA_POLICY_ZERO (2)) (default: do not set)] \n\t"
             "[-D,--device_implementation <implementation number> enable device implementation (default: 0, use NCCL implementation; requires -R 2 if > 0)] \n\t"
             "[-V,--device_cta_count <number> set number of CTAs for device implementation (default: 16)] \n\t"
+            "[-H,--host_rma_implementation <num RMA contexts> enable Host RMA API implementations using <num> RMA contexts\n\t"
+            "    (1 = single context; >1 distributes RMA ops across contexts and requires NCCL >= 2.31.0; requires -R 2)] \n\t"
             "[-M,--memory <0/1> enable memory usage report (default: 0)] \n\t"
             "[-u,--unalign <index of first element> Misalign source and destination buffers (default: 0)] \n\t"
             "[-I,--per_iter_timing <0/1> per-iteration CUDA event timing\n\t"
@@ -1412,6 +1463,23 @@ int main(int argc, char* argv[], char **envp) {
   }
   if (deviceImpl > 0 && (local_register != SYMMETRIC_REGISTER)) {
     fprintf(stderr, "device implementation (-D > 0) requires enabling symmetric memory registration (-R 2)\n");
+    return -1;
+  }
+  if (hostRmaImpl && deviceImpl > 0) {
+    fprintf(stderr, "Cannot use both -H (host RMA implementation) and -D (device implementation) at the same time\n");
+    return -1;
+  }
+  if (hostRmaImpl && (local_register != SYMMETRIC_REGISTER)) {
+    fprintf(stderr, "host RMA implementation (-H) requires enabling symmetric memory registration (-R 2)\n");
+    return -1;
+  }
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,31,0)
+  if (rmaCtxCount > 1 && test_ncclVersion < NCCL_VERSION(2,31,0))
+#else
+  if (rmaCtxCount > 1)
+#endif
+  {
+    fprintf(stderr, "more than one RMA context (-H %d) requires NCCL >= 2.31.0\n", rmaCtxCount);
     return -1;
   }
   if (per_iter_timing != 0 && per_iter_timing != 1) {
@@ -1646,6 +1714,16 @@ testResult_t run() {
        }
      }
      NCCLCHECK(ncclGroupEnd());
+#endif
+#if NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY
+     if (hostRmaImpl) {
+       ncclCommProperties_t commProperties = NCCL_COMM_PROPERTIES_INITIALIZER;
+       NCCLCHECK(ncclCommQueryProperties(comms[0], &commProperties));
+       if (!commProperties.hostRmaSupport) {
+         fprintf(stderr, "Host RMA is not supported on this system\n");
+         return testInvalidUsage;
+       }
+     }
 #endif
      // Capture memory used by after allocating buffers
      for (int g = 0; g < nGpus; ++g) {
