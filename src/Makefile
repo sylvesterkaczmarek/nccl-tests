@@ -5,6 +5,10 @@
 #
 include common.mk
 
+# Permit the experimental NCCL device code used by perf tests.
+CXXFLAGS += -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
+NVCUFLAGS += -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
+
 # Set to 1 to enable MPI support (multi-process/multi-node)
 MPI ?= 0
 # e.g. Set to _mpi when using MPI=1
@@ -96,3 +100,70 @@ ${DST_DIR}/comm_ops_perf$(NAME_SUFFIX): ${DST_DIR}/comm_ops.o $(TEST_OS_LIB)
 
 clean_intermediates:
 	rm -f ${DST_DIR}/*.o $(TEST_VERIFIABLE_OBJS)
+
+# Point-to-point GIN perf sub-framework. Each benchmark category (latency and
+# throughput) has runner sources and operation sources; the operation objects
+# are archived once per category and linked into every category runner.
+DEVICE_API_GIN_SRCDIR       := $(abspath device_api/gin)
+DEVICE_API_GIN_UTILS_SRCDIR := $(DEVICE_API_GIN_SRCDIR)/utils
+DEVICE_API_GIN_UTILS_DST    := $(BUILDDIR)/device_api/gin/utils
+DEVICE_API_GIN_MPI_ENABLED  := $(filter 1,$(MPI))
+DEVICE_API_GIN_EXTRA_INC := -I$(DEVICE_API_GIN_UTILS_SRCDIR) -I$(NCCL_HOME)/include -I$(MPI_HOME)/include
+DEVICE_API_GIN_NVLDFLAGS := $(filter-out -lnccl_test_os -L$(TEST_OS_BUILDDIR),$(NVLDFLAGS))
+
+DEVICE_API_GIN_UTILS_CC_SRCS := $(wildcard $(DEVICE_API_GIN_UTILS_SRCDIR)/*.cc)
+DEVICE_API_GIN_UTILS_CU_SRCS := $(wildcard $(DEVICE_API_GIN_UTILS_SRCDIR)/*.cu)
+DEVICE_API_GIN_UTILS_OBJS := $(patsubst $(DEVICE_API_GIN_UTILS_SRCDIR)/%.cc,$(DEVICE_API_GIN_UTILS_DST)/%.o,$(DEVICE_API_GIN_UTILS_CC_SRCS)) \
+                             $(patsubst $(DEVICE_API_GIN_UTILS_SRCDIR)/%.cu,$(DEVICE_API_GIN_UTILS_DST)/%.o,$(DEVICE_API_GIN_UTILS_CU_SRCS))
+
+$(DEVICE_API_GIN_UTILS_DST)/%.o: $(DEVICE_API_GIN_UTILS_SRCDIR)/%.cc
+	@printf "Compiling  %-35s > %s\n" $< $@
+	@mkdir -p $(DEVICE_API_GIN_UTILS_DST)
+	$(CXX) $(CXXFLAGS) $(DEVICE_API_GIN_EXTRA_INC) -o $@ -c $<
+
+$(DEVICE_API_GIN_UTILS_DST)/%.o: $(DEVICE_API_GIN_UTILS_SRCDIR)/%.cu
+	@printf "Compiling  %-35s > %s\n" $< $@
+	@mkdir -p $(DEVICE_API_GIN_UTILS_DST)
+	$(NVCC) -o $@ $(DEVICE_API_GIN_EXTRA_INC) $(NVCUFLAGS) -c $<
+
+# Allow a single benchmark to be requested with the repository-relative path.
+build/device_api/gin/%: $(BUILDDIR)/device_api/gin/%
+	@:
+
+define DEVICE_API_GIN_CATEGORY
+DEVICE_API_GIN_$(1)_SRCDIR := $$(DEVICE_API_GIN_SRCDIR)/$(1)
+DEVICE_API_GIN_$(1)_DST := $$(BUILDDIR)/device_api/gin/$(1)
+DEVICE_API_GIN_$(1)_MAIN_SRCS := $$(wildcard $$(DEVICE_API_GIN_$(1)_SRCDIR)/*_main.cu)
+DEVICE_API_GIN_$(1)_TEST_SRCS := $$(filter-out $$(DEVICE_API_GIN_$(1)_MAIN_SRCS),$$(wildcard $$(DEVICE_API_GIN_$(1)_SRCDIR)/*.cu))
+DEVICE_API_GIN_$(1)_TEST_OBJS := $$(patsubst $$(DEVICE_API_GIN_$(1)_SRCDIR)/%.cu,$$(DEVICE_API_GIN_$(1)_DST)/%.o,$$(DEVICE_API_GIN_$(1)_TEST_SRCS))
+DEVICE_API_GIN_$(1)_MAIN_OBJS := $$(patsubst $$(DEVICE_API_GIN_$(1)_SRCDIR)/%.cu,$$(DEVICE_API_GIN_$(1)_DST)/%.o,$$(DEVICE_API_GIN_$(1)_MAIN_SRCS))
+DEVICE_API_GIN_$(1)_LIB := $$(DEVICE_API_GIN_$(1)_DST)/libginPerf$(1).a
+DEVICE_API_GIN_$(1)_BINS := $$(patsubst $$(DEVICE_API_GIN_$(1)_SRCDIR)/%_main.cu,$$(DEVICE_API_GIN_$(1)_DST)/%_perf,$$(DEVICE_API_GIN_$(1)_MAIN_SRCS))
+
+ifneq ($$(DEVICE_API_GIN_MPI_ENABLED),)
+build: $$(DEVICE_API_GIN_$(1)_BINS)
+endif
+
+$$(DEVICE_API_GIN_$(1)_TEST_OBJS) $$(DEVICE_API_GIN_$(1)_MAIN_OBJS): $$(DEVICE_API_GIN_$(1)_DST)/%.o: $$(DEVICE_API_GIN_$(1)_SRCDIR)/%.cu
+	@printf "Compiling  %-35s > %s\n" $$< $$@
+	@mkdir -p $$(DEVICE_API_GIN_$(1)_DST)
+	$$(NVCC) -o $$@ $$(DEVICE_API_GIN_EXTRA_INC) $$(NVCUFLAGS) -c $$<
+
+$$(DEVICE_API_GIN_$(1)_LIB): $$(DEVICE_API_GIN_$(1)_TEST_OBJS)
+	@printf "Archiving  %-35s > %s\n" $(1) $$@
+	@mkdir -p $$(DEVICE_API_GIN_$(1)_DST)
+	$$(AR) rcs $$@ $$^
+
+ifeq ($$(DEVICE_API_GIN_MPI_ENABLED),)
+$$(DEVICE_API_GIN_$(1)_BINS):
+	$$(error GIN device API performance tests require MPI=1)
+else
+$$(DEVICE_API_GIN_$(1)_BINS): $$(DEVICE_API_GIN_$(1)_DST)/%_perf: $$(DEVICE_API_GIN_$(1)_DST)/%_main.o $$(DEVICE_API_GIN_$(1)_LIB) $$(DEVICE_API_GIN_UTILS_OBJS)
+	@printf "Linking  %-35s > %s\n" $$< $$@
+	@mkdir -p $$(DEVICE_API_GIN_$(1)_DST)
+	$$(NVCC) -o $$@ $$(NVCUFLAGS) $$< $$(DEVICE_API_GIN_UTILS_OBJS) $$(DEVICE_API_GIN_$(1)_LIB) $$(DEVICE_API_GIN_NVLDFLAGS)
+endif
+endef
+
+$(eval $(call DEVICE_API_GIN_CATEGORY,latency))
+$(eval $(call DEVICE_API_GIN_CATEGORY,throughput))
