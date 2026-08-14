@@ -112,6 +112,23 @@ DEVICE_API_GIN_EXTRA_INC := -I$(DEVICE_API_GIN_UTILS_SRCDIR) -I$(NCCL_HOME)/incl
                             -I$(CUDA_INC) -I$(CUDA_INC)/cccl
 DEVICE_API_GIN_NVLDFLAGS := $(filter-out -lnccl_test_os -L$(TEST_OS_BUILDDIR),$(NVLDFLAGS))
 
+# The GIN device API requirements these benchmarks fill in are only available
+# from NCCL 2.30.7 onwards, so anything older is left out of the build the same
+# way MPI=0 leaves it out. Keep this in step with device_api/gin/CMakeLists.txt.
+# An undetermined version is not treated as too old, so a missing nccl.h fails
+# at compile time like every other test rather than quietly skipping.
+DEVICE_API_GIN_MIN_NCCL_VERSION := 23007
+DEVICE_API_GIN_NCCL_HEADER := $(firstword $(wildcard $(NCCL_HOME)/include/nccl.h /usr/local/include/nccl.h /usr/include/nccl.h))
+DEVICE_API_GIN_NCCL_VERSION := $(if $(DEVICE_API_GIN_NCCL_HEADER),$(shell awk '/^#define[ \t]+NCCL_VERSION_CODE[ \t]+[0-9]+/ {print $$3}' $(DEVICE_API_GIN_NCCL_HEADER) 2>/dev/null))
+DEVICE_API_GIN_NCCL_TOO_OLD := $(shell [ -n "$(DEVICE_API_GIN_NCCL_VERSION)" ] && \
+  [ "$(DEVICE_API_GIN_NCCL_VERSION)" -lt $(DEVICE_API_GIN_MIN_NCCL_VERSION) ] 2>/dev/null && echo 1)
+
+ifneq ($(DEVICE_API_GIN_MPI_ENABLED),)
+ifneq ($(DEVICE_API_GIN_NCCL_TOO_OLD),)
+$(warning Skipping GIN device API performance tests: NCCL version code $(DEVICE_API_GIN_NCCL_VERSION) is older than $(DEVICE_API_GIN_MIN_NCCL_VERSION))
+endif
+endif
+
 DEVICE_API_GIN_UTILS_CC_SRCS := $(wildcard $(DEVICE_API_GIN_UTILS_SRCDIR)/*.cc)
 DEVICE_API_GIN_UTILS_CU_SRCS := $(wildcard $(DEVICE_API_GIN_UTILS_SRCDIR)/*.cu)
 DEVICE_API_GIN_UTILS_OBJS := $(patsubst $(DEVICE_API_GIN_UTILS_SRCDIR)/%.cc,$(DEVICE_API_GIN_UTILS_DST)/%.o,$(DEVICE_API_GIN_UTILS_CC_SRCS)) \
@@ -142,7 +159,9 @@ DEVICE_API_GIN_$(1)_LIB := $$(DEVICE_API_GIN_$(1)_DST)/libginPerf$(1).a
 DEVICE_API_GIN_$(1)_BINS := $$(patsubst $$(DEVICE_API_GIN_$(1)_SRCDIR)/%_main.cu,$$(DEVICE_API_GIN_$(1)_DST)/%_perf,$$(DEVICE_API_GIN_$(1)_MAIN_SRCS))
 
 ifneq ($$(DEVICE_API_GIN_MPI_ENABLED),)
+ifeq ($$(DEVICE_API_GIN_NCCL_TOO_OLD),)
 build: $$(DEVICE_API_GIN_$(1)_BINS)
+endif
 endif
 
 $$(DEVICE_API_GIN_$(1)_TEST_OBJS) $$(DEVICE_API_GIN_$(1)_MAIN_OBJS): $$(DEVICE_API_GIN_$(1)_DST)/%.o: $$(DEVICE_API_GIN_$(1)_SRCDIR)/%.cu
@@ -158,6 +177,9 @@ $$(DEVICE_API_GIN_$(1)_LIB): $$(DEVICE_API_GIN_$(1)_TEST_OBJS)
 ifeq ($$(DEVICE_API_GIN_MPI_ENABLED),)
 $$(DEVICE_API_GIN_$(1)_BINS):
 	$$(error GIN device API performance tests require MPI=1)
+else ifneq ($$(DEVICE_API_GIN_NCCL_TOO_OLD),)
+$$(DEVICE_API_GIN_$(1)_BINS):
+	$$(error GIN device API performance tests require NCCL version code $$(DEVICE_API_GIN_MIN_NCCL_VERSION) or newer)
 else
 $$(DEVICE_API_GIN_$(1)_BINS): $$(DEVICE_API_GIN_$(1)_DST)/%_perf: $$(DEVICE_API_GIN_$(1)_DST)/%_main.o $$(DEVICE_API_GIN_$(1)_LIB) $$(DEVICE_API_GIN_UTILS_OBJS)
 	@printf "Linking  %-35s > %s\n" $$< $$@
