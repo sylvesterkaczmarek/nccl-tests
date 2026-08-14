@@ -76,13 +76,24 @@ testResult_t AlltoAllGetDevCommRequirements(int deviceImpl, ncclDevCommRequireme
       return testSuccess;
     #if defined(NCCL_OS_LINUX)
     case 3: // GinAlltoAllKernel
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 0)
+      reqs->worldGinBarrierCount = deviceCtaCount;
+#endif
+      // fall through
     case 4: // HybridAlltoAllKernel (LSA+GIN)
       if (commProperties.ginType == NCCL_GIN_TYPE_NONE) {
         fprintf(stderr, "This test requires GIN support, but GIN support is not enabled for this communicator.\n");
         return testInvalidUsage;
       }
-      reqs->barrierCount = deviceCtaCount;
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 0)
+      if (deviceImpl == 4)
+#endif
+        reqs->barrierCount = deviceCtaCount;
       reqs->ginSignalCount = deviceCtaCount;
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 7)
+      reqs->ginStrongSignalsRequired = false;
+      reqs->ginVaSignalsRequired = false;
+#endif
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
       reqs->ginConnectionType = NCCL_GIN_CONNECTION_FULL;
 #else
@@ -230,6 +241,12 @@ __global__ void NvlAlltoAllKernelOptimized(ncclWindow_t sendwin, size_t sendoffs
 }
 
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,28,7) && defined(NCCL_OS_LINUX)
+// None is canonical from 2.30.7; Relaxed is the only enumerator on earlier headers.
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 7)
+#define NCCL_TEST_GIN_FENCE_LEVEL ncclGinFenceLevel::None
+#else
+#define NCCL_TEST_GIN_FENCE_LEVEL ncclGinFenceLevel::Relaxed
+#endif
 template <typename T>
 __global__ void GinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, ncclWindow_t recvwin, size_t recvoffset, size_t count, int root, struct ncclDevComm devComm) {
   int ginContext = 0;
@@ -237,8 +254,12 @@ __global__ void GinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, ncclW
   ncclGin gin { devComm, ginContext };
   uint64_t signalValue = gin.readSignal(signalIndex);
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 0)
+  ncclGinBarrierSession<ncclCoopCta> bar { ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x };
+#else
   ncclBarrierSession<ncclCoopCta> bar { ncclCoopCta(), ncclTeamTagWorld(), gin, blockIdx.x };
-  bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
+#endif
+  bar.sync(ncclCoopCta(), cuda::memory_order_acquire, NCCL_TEST_GIN_FENCE_LEVEL);
 
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int nthreads = blockDim.x * gridDim.x;
@@ -249,15 +270,21 @@ __global__ void GinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, ncclW
     gin.put(ncclTeamWorld(devComm), r,
         recvwin, recvoffset + devComm.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size,
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 7)
+        ncclGin_WeakSignalInc{signalIndex});
+#else
+        ncclGin_SignalInc{signalIndex});
+#endif
   }
 
   int receivingCta = (devComm.rank % nthreads) / blockDim.x;
   if (blockIdx.x == receivingCta)
     gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
   gin.flush(ncclCoopCta());
-
-  bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
+#if NCCL_VERSION_CODE < NCCL_VERSION(2, 30, 0)
+  bar.sync(ncclCoopCta(), cuda::memory_order_release, NCCL_TEST_GIN_FENCE_LEVEL);
+#endif
 }
 
 template <typename T>
@@ -268,7 +295,7 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, nc
   uint64_t signalValue = gin.readSignal(signalIndex);
 
   ncclBarrierSession<ncclCoopCta> bar { ncclCoopCta(), ncclTeamTagWorld(), gin, blockIdx.x };
-  bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
+  bar.sync(ncclCoopCta(), cuda::memory_order_acquire, NCCL_TEST_GIN_FENCE_LEVEL);
 
   int tid = threadIdx.x + blockIdx.x*blockDim.x;
   int nthreads = blockDim.x * gridDim.x;
@@ -285,7 +312,12 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, nc
       gin.put(world, r,
           recvwin, recvoffset + world.rank * size,
           sendwin, sendoffset + r * size,
-          size, ncclGin_SignalInc{signalIndex});
+          size,
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 30, 7)
+          ncclGin_WeakSignalInc{signalIndex});
+#else
+          ncclGin_SignalInc{signalIndex});
+#endif
     }
   }
 
@@ -305,7 +337,7 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, nc
     gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + numRemotePeers);
   gin.flush(ncclCoopCta());
 
-  bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
+  bar.sync(ncclCoopCta(), cuda::memory_order_release, NCCL_TEST_GIN_FENCE_LEVEL);
 }
 #endif
 #endif
