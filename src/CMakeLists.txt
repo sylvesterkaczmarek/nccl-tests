@@ -53,3 +53,29 @@ foreach(COLL IN LISTS COLLS)
     target_link_libraries(${COLL}_perf PRIVATE MPI::MPI_CXX)
   endif()
 endforeach()
+
+add_executable(comm_ops_perf comm_ops.cu)
+set_target_properties(comm_ops_perf PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+target_include_directories(comm_ops_perf
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/os
+)
+
+target_link_libraries(comm_ops_perf
+  PRIVATE
+    nccl_tests_options
+    nccl
+    CUDA::cudart
+    CUDA::cuda_driver
+    nccl_test_os
+)
+
+if(MPI_FOUND)
+  target_compile_definitions(comm_ops_perf PRIVATE MPI_SUPPORT)
+  target_include_directories(comm_ops_perf PRIVATE ${MPI_CXX_INCLUDE_DIRS})
+  target_link_libraries(comm_ops_perf PRIVATE MPI::MPI_CXX)
+endif()
