@@ -7,25 +7,13 @@ if(NOT MPI_FOUND)
 endif()
 
 # The GIN device API requirements these benchmarks fill in are only available
-# from NCCL 2.30.7 onwards, so anything older is left out of the build the same
-# way a missing MPI leaves it out. Keep this in step with src/Makefile. An
-# undetermined version is not treated as too old, so a missing nccl.h fails at
-# compile time like every other test rather than quietly skipping.
+# from NCCL 2.30.7 onwards.
 set(DEVICE_API_GIN_MIN_NCCL_VERSION 23007)
-set(DEVICE_API_GIN_NCCL_HEADER "${NCCL_INCLUDE_DIR}/nccl.h")
-file(STRINGS "${DEVICE_API_GIN_NCCL_HEADER}" device_api_gin_nccl_version_line
-     REGEX "^#define[ \t]+NCCL_VERSION_CODE[ \t]+[0-9]+")
-string(REGEX MATCH "[0-9]+" DEVICE_API_GIN_NCCL_VERSION "${device_api_gin_nccl_version_line}")
-
-set(DEVICE_API_GIN_NCCL_TOO_OLD FALSE)
-if(DEVICE_API_GIN_NCCL_VERSION AND
-   DEVICE_API_GIN_NCCL_VERSION LESS DEVICE_API_GIN_MIN_NCCL_VERSION)
-    set(DEVICE_API_GIN_NCCL_TOO_OLD TRUE)
-endif()
+nccl_older_than(DEVICE_API_GIN_NCCL_TOO_OLD ${DEVICE_API_GIN_MIN_NCCL_VERSION})
 
 if(DEVICE_API_GIN_NCCL_TOO_OLD)
     message(STATUS "Skipping GIN device API performance tests: NCCL version code "
-                   "${DEVICE_API_GIN_NCCL_VERSION} is older than ${DEVICE_API_GIN_MIN_NCCL_VERSION}")
+                   "${NCCL_HEADER_VERSION} is older than ${DEVICE_API_GIN_MIN_NCCL_VERSION}")
     return()
 endif()
 
