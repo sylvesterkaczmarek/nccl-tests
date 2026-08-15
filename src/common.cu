@@ -552,6 +552,7 @@ testResult_t startColl(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
   size_t totalnbytes = max(args->sendBytes, args->expectedBytes);
   size_t steps = totalnbytes ? args->maxbytes / totalnbytes : 1;
   size_t shift = totalnbytes * (iter % steps);
+  size_t unalignBytes = (size_t)unalign * wordSize(type);
 
   if (args->nGpus > 1) NCCLCHECK(ncclGroupStart());
   for (int i = 0; i < args->nGpus; i++) {
@@ -607,8 +608,8 @@ testResult_t startColl(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
       void* recvwin = args->recvRegHandles[i];
       CUDACHECK(cudaSetDevice(args->gpus[i]));
       TESTCHECK(args->collTest->runColl(
-            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0),
-            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0),
+            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0) + unalignBytes,
+            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0) + unalignBytes,
             count, type, op, root, args->comms[i], args->streams[i], HOST_RMA_IMPL));
     } else
 #endif
@@ -623,8 +624,8 @@ testResult_t startColl(struct threadArgs* args, ncclDataType_t type, ncclRedOp_t
       void* recvwin = args->recvRegHandles[i];
       CUDACHECK(cudaSetDevice(args->gpus[i]));
       TESTCHECK(args->collTest->runColl(
-            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0),
-            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0),
+            (void*)(in_place ? recvwin : sendwin), shift + (in_place ? args->sendInplaceOffset*rank : 0) + unalignBytes,
+            (void*)recvwin, shift + (in_place ? args->recvInplaceOffset*rank : 0) + unalignBytes,
             count, type, op, root, (ncclComm_t)(args->devComms+i), args->streams[i], deviceImpl));
 #endif
     }
@@ -1020,11 +1021,12 @@ testResult_t threadInit(struct threadArgs* args) {
 
   /* Allocate buffers for each GPU (parallel_init: each thread allocates its own) */
   size_t sendBytes, recvBytes;
+  size_t allocBytes;
   ncclTestEngine.getBuffSize(&sendBytes, &recvBytes, (size_t)args->maxbytes, (size_t)nranks);
   NCCLCHECK(ncclGroupStart());
   for (int i = 0; i < args->nGpus; i++) {
     CUDACHECK(cudaSetDevice(args->gpus[i]));
-    TESTCHECK(AllocateBuffs(args->sendbuffs + i, sendBytes, args->recvbuffs + i, recvBytes, args->expected + i, (size_t)args->maxbytes));
+    TESTCHECK(AllocateBuffs(args->sendbuffs + i, sendBytes, args->recvbuffs + i, recvBytes, args->expected + i, (size_t)args->maxbytes, &allocBytes));
   }
   NCCLCHECK(ncclGroupEnd());
 
@@ -1040,13 +1042,13 @@ testResult_t threadInit(struct threadArgs* args) {
   for (int i=0; i<args->nGpus; i++) {
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,27,0)
     if (test_ncclVersion >= NCCL_VERSION(2,27,0) && (local_register == SYMMETRIC_REGISTER)) {
-      NCCLCHECK(ncclCommWindowRegister(args->comms[i], args->sendbuffs[i], args->maxbytes, (ncclWindow_t*)&args->sendRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
-      NCCLCHECK(ncclCommWindowRegister(args->comms[i], args->recvbuffs[i], args->maxbytes, (ncclWindow_t*)&args->recvRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
+      NCCLCHECK(ncclCommWindowRegister(args->comms[i], args->sendbuffs[i], allocBytes, (ncclWindow_t*)&args->sendRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
+      NCCLCHECK(ncclCommWindowRegister(args->comms[i], args->recvbuffs[i], allocBytes, (ncclWindow_t*)&args->recvRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
     } else
 #endif
     {
-      if (local_register) NCCLCHECK(ncclCommRegister(args->comms[i], args->sendbuffs[i], args->maxbytes, &args->sendRegHandles[i]));
-      if (local_register) NCCLCHECK(ncclCommRegister(args->comms[i], args->recvbuffs[i], args->maxbytes, &args->recvRegHandles[i]));
+      if (local_register) NCCLCHECK(ncclCommRegister(args->comms[i], args->sendbuffs[i], allocBytes, &args->sendRegHandles[i]));
+      if (local_register) NCCLCHECK(ncclCommRegister(args->comms[i], args->recvbuffs[i], allocBytes, &args->recvRegHandles[i]));
     }
   }
   NCCLCHECK(ncclGroupEnd());
@@ -1130,7 +1132,7 @@ testResult_t threadLaunch(struct testThread* thread) {
   return testSuccess;
 }
 
-testResult_t AllocateBuffs(void **sendbuff, size_t sendBytes, void **recvbuff, size_t recvBytes, void **expected, size_t nbytes) {
+testResult_t AllocateBuffs(void **sendbuff, size_t sendBytes, void **recvbuff, size_t recvBytes, void **expected, size_t nbytes, size_t *allocBytes) {
     nbytes += 8*unalign; // pad with size of max datatype in case all datatypes selected
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,19,0)
     NCCLCHECK(ncclMemAlloc(sendbuff, nbytes));
@@ -1141,6 +1143,7 @@ testResult_t AllocateBuffs(void **sendbuff, size_t sendBytes, void **recvbuff, s
     CUDACHECK(cudaMalloc(recvbuff, nbytes));
     if (datacheck) CUDACHECK(cudaMalloc(expected, recvBytes));
 #endif
+    *allocBytes = nbytes;
     return testSuccess;
 }
 
@@ -1627,6 +1630,7 @@ testResult_t run() {
   std::vector<void*> recvbuffs(nGpus*nThreads);
   std::vector<void*> expected(nGpus*nThreads);
   size_t sendBytes, recvBytes;
+  size_t allocBytes;
 
   ncclTestEngine.getBuffSize(&sendBytes, &recvBytes, (size_t)maxBytes, (size_t)ncclProcs*nGpus*nThreads);
 
@@ -1701,16 +1705,16 @@ testResult_t run() {
      NCCLCHECK(ncclGroupStart());
      for (int i=0; i<nGpus*nThreads; i++) {
        CUDACHECK(cudaSetDevice(gpus[i]));
-       TESTCHECK(AllocateBuffs(sendbuffs.data()+i, sendBytes, recvbuffs.data()+i, recvBytes, expected.data()+i, (size_t)maxBytes));
+       TESTCHECK(AllocateBuffs(sendbuffs.data()+i, sendBytes, recvbuffs.data()+i, recvBytes, expected.data()+i, (size_t)maxBytes, &allocBytes));
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,27,0)
        if (test_ncclVersion >= NCCL_VERSION(2,27,0) && (local_register == SYMMETRIC_REGISTER)) {
-         NCCLCHECK(ncclCommWindowRegister(comms[i], sendbuffs[i], maxBytes, (ncclWindow_t*)&sendRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
-         NCCLCHECK(ncclCommWindowRegister(comms[i], recvbuffs[i], maxBytes, (ncclWindow_t*)&recvRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
+         NCCLCHECK(ncclCommWindowRegister(comms[i], sendbuffs[i], allocBytes, (ncclWindow_t*)&sendRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
+         NCCLCHECK(ncclCommWindowRegister(comms[i], recvbuffs[i], allocBytes, (ncclWindow_t*)&recvRegHandles[i], NCCL_WIN_COLL_SYMMETRIC));
        } else
 #endif
        {
-         if (local_register) NCCLCHECK(ncclCommRegister(comms[i], sendbuffs[i], maxBytes, &sendRegHandles[i]));
-         if (local_register) NCCLCHECK(ncclCommRegister(comms[i], recvbuffs[i], maxBytes, &recvRegHandles[i]));
+         if (local_register) NCCLCHECK(ncclCommRegister(comms[i], sendbuffs[i], allocBytes, &sendRegHandles[i]));
+         if (local_register) NCCLCHECK(ncclCommRegister(comms[i], recvbuffs[i], allocBytes, &recvRegHandles[i]));
        }
      }
      NCCLCHECK(ncclGroupEnd());
