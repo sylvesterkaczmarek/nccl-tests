@@ -96,6 +96,7 @@ Collective perf tests support the same set of arguments :
   * `-C,--report_cputime <0/1>` Report CPU time instead of latency. Default : 0.
   * `-R,--local_register <0/1/2>` enable local (1) or symmetric (2) buffer registration on send/recv buffers. Default : 0.
   * `-D,--device_implementation <implementation number>` use custom device API implementation. Not every collective has a custom device API implementations (currently just all\_reduce and alltoall). Default : 0 (use traditional NCCL host implementation). Note: values > 0 require symmetric memory registration (`-R 2`).
+  * `-H,--host_rma_implementation <num RMA contexts>` use host one-sided RMA (`ncclPutSignal`/`ncclWaitSignal`) instead of the built-in collective. Supported by sendrecv, alltoall, all\_gather, broadcast, gather, and scatter. `1` uses a single context; values `>1` distribute RMA traffic across contexts and require NCCL >= 2.31. Requires symmetric registration (`-R 2`). Mutually exclusive with `-D`.
   * `-V,--device_cta_count <number>` number of CTAs for device API implementation. Must be positive and less than 128. Default : 16.
   * `-S,--report_timestamps <0/1>` Add timestamp (`"%Y-%m-%d %H:%M:%S"`) to each performance report line. Default : 0.
   * `-J,--output_file <file>` Write [JSON] output to filepath. Infer type from suffix (only `json` supported presently).

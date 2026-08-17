@@ -26,6 +26,20 @@
 // For nccl.h < 2.13 since we define a weak fallback
 extern "C" char const* ncclGetLastError(ncclComm_t comm);
 
+#define HOST_RMA_IMPL 10
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,29,4)
+#define NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY 1
+#else
+#define NCCL_TESTS_HAS_HOST_RMA_SUPPORT_PROPERTY 0
+#endif
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2,31,0)
+#define NUM_RMA_SIG 4
+#else
+#define NUM_RMA_SIG 1
+#endif
+
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
   if( err != cudaSuccess ) {                        \
@@ -189,7 +203,7 @@ extern void Barrier(struct threadArgs* args);
 extern testResult_t TimeTest(struct threadArgs* args, ncclDataType_t type, const char* typeName, ncclRedOp_t op,  const char* opName, int root);
 extern testResult_t InitDataReduce(void* data, const size_t count, const size_t offset, ncclDataType_t type, ncclRedOp_t op, const uint64_t seed, const int nranks);
 extern testResult_t InitData(void* data, const size_t count, size_t offset, ncclDataType_t type, ncclRedOp_t op, const uint64_t seed, const int nranks, const int rank);
-extern testResult_t AllocateBuffs(void **sendbuff, size_t sendBytes, void **recvbuff, size_t recvBytes, void **expected, size_t nbytes);
+extern testResult_t AllocateBuffs(void **sendbuff, size_t sendBytes, void **recvbuff, size_t recvBytes, void **expected, size_t nbytes, size_t *allocBytes);
 
 static void getHostName(char* hostname, int maxlen) {
   ncclTestGetHostname(hostname, maxlen);
@@ -267,6 +281,7 @@ static size_t wordSize(ncclDataType_t type) {
 
 extern int test_ncclVersion; // init'd with ncclGetVersion()
 extern int deviceCtaCount; // number of CTAs for device implementation
+extern int rmaCtxCount; // number of RMA contexts to provision for host RMA (-H)
 constexpr int test_opNumMax = (int)ncclNumOps + (NCCL_VERSION_CODE >= NCCL_VERSION(2,11,0) ? 1 : 0);
 extern int test_opnum;
 extern int test_typenum;
