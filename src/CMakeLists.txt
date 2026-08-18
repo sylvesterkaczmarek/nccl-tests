@@ -4,6 +4,9 @@
 # See LICENSE.txt for license information
 #
 
+# Permit the experimental NCCL device code used by perf tests.
+add_compile_definitions(NCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1)
+
 set(PERF_COMMON_SOURCES
   common.cu
   util.cu
@@ -53,6 +56,10 @@ foreach(COLL IN LISTS COLLS)
     target_link_libraries(${COLL}_perf PRIVATE MPI::MPI_CXX)
   endif()
 endforeach()
+
+if(MPI_FOUND)
+  add_subdirectory(device_api/gin)
+endif()
 
 add_executable(comm_ops_perf comm_ops.cu)
 set_target_properties(comm_ops_perf PROPERTIES

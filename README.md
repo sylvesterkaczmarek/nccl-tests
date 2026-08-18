@@ -136,6 +136,12 @@ $ mpirun -np 8 ./build/comm_ops_perf grow --resize factor-1.5
 
 Pass a test mode (`init`, `split`, `shrink`, or `grow`) followed by options such as `-i` (timed iterations), `-w` (untimed warmup iterations), `-s` / `-b` / `-e` (comm-size sweep), `-r` (resize for split/shrink/grow), `-S` (share resources), and `-a` (abort path). Output is per-operation latency summaries in ms; use `--help` for details.
 
+### GIN device API microbenchmarks (`device_api/gin`)
+
+Measures latency and bandwidth / message rate of NCCL GIN point-to-point device API operations (`put`, `get`, `signal`, and combined variants). Requires `MPI=1`, NCCL 2.30.7 or newer, and exactly 2 ranks (one GPU each). Against older NCCL these binaries are simply left out of the build.
+
+See [src/device_api/gin/README.md](src/device_api/gin/README.md) for the full list of benchmarks and their options.
+
 ## Copyright
 
 NCCL tests are provided under the BSD license. All source code and accompanying documentation is copyright (c) 2016-2026, NVIDIA CORPORATION. All rights reserved.
