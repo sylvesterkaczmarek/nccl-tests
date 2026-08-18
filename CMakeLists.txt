@@ -23,6 +23,16 @@ endif()
 find_package(CUDAToolkit REQUIRED)
 find_package(MPI QUIET)
 
+set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/obj/include/nccl_tests_git_version.h")
+add_custom_target(generate_git_version ALL
+  COMMAND ${CMAKE_COMMAND}
+          -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+          -DOUTPUT_FILE=${GIT_VERSION_FILE}
+          -P ${CMAKE_SOURCE_DIR}/tools/generate_git_version.cmake
+  BYPRODUCTS ${GIT_VERSION_FILE}
+  VERBATIM
+)
+
 if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.0)
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CUDA_STANDARD 17)
@@ -102,6 +112,7 @@ target_compile_definitions(nccl_tests_options INTERFACE
   $<$<BOOL:${NCCL_OS_WINDOWS}>:NOMINMAX>
   $<$<BOOL:${NCCL_OS_WINDOWS}>:NCCL_GIN_PROXY_ENABLE=0>
 )
+target_include_directories(nccl_tests_options INTERFACE ${CMAKE_BINARY_DIR}/obj/include)
 
 if(MSVC)
   target_compile_options(nccl_tests_options INTERFACE
