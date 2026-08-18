@@ -1402,7 +1402,7 @@ int main(int argc, char* argv[], char **envp) {
         break;
       case 'h':
       default:
-        if (c != 'h') printf("invalid option '%c'\n", c);
+        if (c != 'h') printf("invalid option '%c'\n", c == '?' && optopt ? optopt : c);
         printf("USAGE: %s \n\t"
             "[-t,--nthreads <num threads>] \n\t"
             "[-g,--ngpus <gpus per thread>] \n\t"
