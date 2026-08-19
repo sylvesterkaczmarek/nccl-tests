@@ -53,6 +53,7 @@ foreach(COLL IN LISTS COLLS)
   add_executable(${COLL}_perf ${COLL}.cu ${PERF_COMMON_SOURCES})
   add_dependencies(${COLL}_perf generate_git_version)
   set_target_properties(${COLL}_perf PROPERTIES
+    ENABLE_EXPORTS TRUE
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
   )
 

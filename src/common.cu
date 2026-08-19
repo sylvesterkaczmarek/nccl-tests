@@ -113,6 +113,7 @@ static int deviceImpl = 0;
 static int hostRmaImpl = 0;
 int unalign = 0;
 int memory_report = 0;
+int tuning = 0;
 
 int deviceCtaCount = 16; // Default number of CTAs for device implementation
 int rmaCtxCount = 1;     // Number of RMA contexts to provision for host RMA (-H)
@@ -1227,13 +1228,14 @@ int main(int argc, char* argv[], char **envp) {
     {"per_iter_timing", required_argument, 0, 'I'},
     {"per_iter_skip", required_argument, 0, 'K'},
     {"host_rma_implementation", required_argument, 0, 'H'},
+    {"tuning", required_argument, 0, 'U'},
     {"help", no_argument, 0, 'h'},
     {}
   };
 
   while(1) {
     int c;
-    c = getopt_long(argc, argv, "t:g:b:e:i:f:n:m:w:N:p:I:K:c:o:d:r:z:y:T:hG:C:a:R:x:D:V:J:S:M:u:H:", longopts, &longindex);
+    c = getopt_long(argc, argv, "t:g:b:e:i:f:n:m:w:N:p:I:K:c:o:d:r:z:y:T:hG:C:a:R:x:D:V:J:S:M:u:H:U:", longopts, &longindex);
 
     if (c == -1)
       break;
@@ -1351,6 +1353,13 @@ int main(int argc, char* argv[], char **envp) {
       case 'K':
         per_iter_skip = (int)strtol(optarg, NULL, 0);
         break;
+      case 'U':
+        tuning = (int)strtol(optarg, NULL, 0);
+        if (tuning && test_ncclVersion < NCCL_VERSION(2,28,0)) {
+          printf("Option -U (tuning) is not supported before NCCL 2.28. Ignoring\n");
+          tuning = 0;
+        }
+        break;
       case 'x':
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,27,0)
         ctaPolicy = (int)strtol(optarg, NULL, 0);
@@ -1451,6 +1460,7 @@ int main(int argc, char* argv[], char **envp) {
             "    i_p99 uses nearest-rank percentile and may equal i_max\n\t"
             "    with <100 samples) (default: 0)] \n\t"
             "[-K,--per_iter_skip <count> exclude leading samples from -I summary stats (default: 0)] \n\t"
+            "[-U,--tuning <0/1> report NCCL tuning info (NCCL >= 2.28; full detail >= 2.31) (default: 0)] \n\t"
             "[-h,--help]\n",
           programName);
         return 0;
@@ -1502,6 +1512,18 @@ int main(int argc, char* argv[], char **envp) {
   if (per_iter_skip && !per_iter_timing) {
     fprintf(stderr, "per-iteration skip (-K) requires per-iteration timing (-I 1). Disabling.\n");
     per_iter_skip = 0;
+  }
+
+  if (tuning) {
+    const char* profilerPlugin = getenv("NCCL_PROFILER_PLUGIN");
+    if (profilerPlugin && strcmp(profilerPlugin, "STATIC_PLUGIN") != 0) {
+      fprintf(stderr, "Option -U overrides NCCL_PROFILER_PLUGIN=%s with STATIC_PLUGIN\n", profilerPlugin);
+    }
+#if defined(NCCL_OS_WINDOWS)
+    _putenv_s("NCCL_PROFILER_PLUGIN", "STATIC_PLUGIN");
+#else
+    setenv("NCCL_PROFILER_PLUGIN", "STATIC_PLUGIN", 1);
+#endif
   }
 
 #ifdef MPI_SUPPORT
