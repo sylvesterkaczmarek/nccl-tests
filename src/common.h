@@ -23,6 +23,14 @@
 #include "timer.h"
 #include "os.h"
 
+#if defined(NCCL_OS_LINUX) && NCCL_VERSION_CODE >= NCCL_VERSION(2,29,0)
+// Allow binaries built with newer headers to load older NCCL libraries when optional APIs are unused.
+#pragma weak ncclCommQueryProperties
+#pragma weak ncclWinGetUserPtr
+#pragma weak ncclPutSignal
+#pragma weak ncclWaitSignal
+#endif
+
 // For nccl.h < 2.13 since we define a weak fallback
 extern "C" char const* ncclGetLastError(ncclComm_t comm);
 
