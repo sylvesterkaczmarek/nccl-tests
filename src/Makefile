@@ -16,9 +16,11 @@ NAME_SUFFIX ?=
 # Set to 1 to create and use libverifiable.so to reduce binary size
 DSO ?= 0
 
-.PHONY: build clean
+.PHONY: build clean FORCE
 
 BUILDDIR ?= ../build
+GIT_VERSION_FILE := $(BUILDDIR)/obj/include/nccl_tests_git_version.h
+NVCUFLAGS += -I$(BUILDDIR)/obj/include
 ifneq ($(NCCL_HOME), "")
 NVCUFLAGS += -I$(NCCL_HOME)/include/
 NVLDFLAGS += -L$(NCCL_HOME)/lib
@@ -78,6 +80,15 @@ build: os.build ${BIN_FILES}
 clean:
 	rm -rf ${DST_DIR}
 
+$(GIT_VERSION_FILE): FORCE
+	@mkdir -p "$(dir $@)"
+	@version=$$(git -C .. describe --dirty --always --exclude '*' 2>/dev/null || echo unknown); \
+	printf '#define NCCL_TESTS_GIT_VERSION "%s"\n' "$$version" > "$@.tmp"; \
+	cmp -s "$@.tmp" "$@" || cp "$@.tmp" "$@"; \
+	rm -f "$@.tmp"
+
+FORCE:
+
 TEST_VERIFIABLE_SRCDIR := ../verifiable
 TEST_VERIFIABLE_BUILDDIR := $(BUILDDIR)/verifiable
 include ../verifiable/verifiable.mk
@@ -99,6 +110,8 @@ ${DST_DIR}/%$(NAME_SUFFIX).o: %.cu common.h util.h $(TEST_VERIFIABLE_HDRS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p ${DST_DIR}
 	$(NVCC) -o $@ $(NVCUFLAGS) -c $<
+
+${DST_DIR}/util$(NAME_SUFFIX).o: $(GIT_VERSION_FILE)
 
 ${DST_DIR}/timer.o: timer.cc timer.h
 	@printf "Compiling  %-35s > %s\n" $< $@
