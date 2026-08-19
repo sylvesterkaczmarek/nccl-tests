@@ -25,7 +25,6 @@
 #pragma weak ncclCommWindowDeregister
 #pragma weak ncclDevCommCreate
 #pragma weak ncclDevCommDestroy
-#pragma weak ncclCommQueryProperties
 #endif
 
 #define DIVUP(x, y) \
