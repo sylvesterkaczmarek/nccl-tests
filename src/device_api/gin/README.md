@@ -4,30 +4,33 @@ These tests measure latency and bandwidth / message rate of NCCL GIN
 point-to-point device API operations (`put`, `get`, `signal`, and combined
 variants).
 
-They require MPI and always run with exactly **2 ranks** (one GPU each).
+They require NCCL 2.30.7+, MPI, and must always run with exactly
+**2 ranks** (one GPU each).
 
 ## Build
 
-Build NCCL first, then build the perf tests with MPI enabled from
-`test/perf`:
+From the root of the `nccl-tests` repository, build the tests with MPI enabled:
 
 ```shell
-$ make -C src -j
-$ make -C test/perf -j MPI=1 MPI_HOME=/path/to/mpi
+$ make -j MPI=1 MPI_HOME=/path/to/mpi NCCL_HOME=/path/to/nccl
 ```
 
 If CUDA is not installed in `/usr/local/cuda`, set `CUDA_HOME`. Binaries are
-written under `build/test/perf/device_api/gin/`.
+written under `build/device_api/gin/`.
 
 You can also build a single binary, for example:
 
 ```shell
-$ make -C test/perf MPI=1 MPI_HOME=/path/to/mpi \
-    build/test/perf/device_api/gin/throughput/ginPutBW_perf
+$ make -C src -j MPI=1 MPI_HOME=/path/to/mpi NCCL_HOME=/path/to/nccl \
+    build/device_api/gin/throughput/ginPutBW_perf
 ```
 
-With CMake, the suite is built when MPI is found (`test/perf` adds
-`device_api/gin` only if `MPI_FOUND`).
+With CMake, configure and build from the repository root:
+
+```shell
+$ cmake -S . -B build -DNCCL_HOME=/path/to/nccl
+$ cmake --build build -j
+```
 
 ## Usage
 
@@ -35,7 +38,7 @@ Process count is managed by MPI and is not passed as a test argument. Use
 exactly two ranks:
 
 ```shell
-$ mpirun -np 2 ./build/test/perf/device_api/gin/<category>/<binary>_perf [OPTIONS]
+$ mpirun -np 2 ./build/device_api/gin/<category>/<binary>_perf [OPTIONS]
 ```
 
 ### Quick examples
@@ -43,20 +46,20 @@ $ mpirun -np 2 ./build/test/perf/device_api/gin/<category>/<binary>_perf [OPTION
 Default put bandwidth size sweep (4B to 4M, factor 2):
 
 ```shell
-$ mpirun -np 2 ./build/test/perf/device_api/gin/throughput/ginPutBW_perf
+$ mpirun -np 2 ./build/device_api/gin/throughput/ginPutBW_perf
 ```
 
 put+signal bandwidth with 16 CTAs and 32 threads per CTA:
 
 ```shell
-$ mpirun -np 2 ./build/test/perf/device_api/gin/throughput/ginPutBW_perf \
+$ mpirun -np 2 ./build/device_api/gin/throughput/ginPutBW_perf \
     --gin_op put_signal -c 16 -t 32
 ```
 
 put ping-pong latency from 4 B to 1 MiB:
 
 ```shell
-$ mpirun -np 2 ./build/test/perf/device_api/gin/latency/ginPutLatency_pingPong_perf \
+$ mpirun -np 2 ./build/device_api/gin/latency/ginPutLatency_pingPong_perf \
     -b 4 -e 1M -f 2
 ```
 
@@ -125,6 +128,6 @@ By default, optimization knobs above are off. Pass them explicitly when you
 want a more aggressive configuration, for example:
 
 ```shell
-$ mpirun -np 2 ./build/test/perf/device_api/gin/throughput/ginPutBW_perf \
+$ mpirun -np 2 ./build/device_api/gin/throughput/ginPutBW_perf \
     --gin_op put_signal -c 16 -t 32 --gin_rsm cta --gin_ag --gin_skip_credit_check
 ```
