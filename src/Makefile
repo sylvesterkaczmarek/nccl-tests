@@ -157,6 +157,16 @@ DEVICE_API_GIN_EXTRA_INC := -I$(DEVICE_API_GIN_UTILS_SRCDIR) -I$(NCCL_HOME)/incl
                             -I$(CUDA_INC) -I$(CUDA_INC)/cccl
 DEVICE_API_GIN_NVLDFLAGS := $(filter-out -lnccl_test_os -L$(TEST_OS_BUILDDIR),$(NVLDFLAGS))
 
+# GIN throughput tests support 1024-thread CTAs, which require at most 60
+# registers per thread. Change to use these guidelines -> threads:regs
+# 512 : 120, 640 : 96, 768 : 80, 1024 : 60
+DEVICE_API_GIN_BASE_MAXRREG := $(firstword $(filter -maxrregcount=%,$(NVCUFLAGS)))
+DEVICE_API_GIN_NVCUFLAGS := $(NVCUFLAGS)
+ifneq ($(DEVICE_API_GIN_BASE_MAXRREG),)
+DEVICE_API_GIN_NVCUFLAGS := $(subst -Xptxas $(DEVICE_API_GIN_BASE_MAXRREG),,$(DEVICE_API_GIN_NVCUFLAGS))
+endif
+DEVICE_API_GIN_NVCUFLAGS += -Xptxas -maxrregcount=60
+
 # The GIN device API requirements these benchmarks fill in are only available
 # from NCCL 2.30.7 onwards.
 DEVICE_API_GIN_MIN_NCCL_VERSION := 23007
@@ -208,7 +218,7 @@ endif
 $$(DEVICE_API_GIN_$(1)_TEST_OBJS) $$(DEVICE_API_GIN_$(1)_MAIN_OBJS): $$(DEVICE_API_GIN_$(1)_DST)/%.o: $$(DEVICE_API_GIN_$(1)_SRCDIR)/%.cu
 	@printf "Compiling  %-35s > %s\n" $$< $$@
 	@mkdir -p $$(DEVICE_API_GIN_$(1)_DST)
-	$$(NVCC) -o $$@ $$(DEVICE_API_GIN_EXTRA_INC) $$(NVCUFLAGS) -c $$<
+	$$(NVCC) -o $$@ $$(DEVICE_API_GIN_EXTRA_INC) $$(DEVICE_API_GIN_NVCUFLAGS) -c $$<
 
 $$(DEVICE_API_GIN_$(1)_LIB): $$(DEVICE_API_GIN_$(1)_TEST_OBJS)
 	@printf "Archiving  %-35s > %s\n" $(1) $$@

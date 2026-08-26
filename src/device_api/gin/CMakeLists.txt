@@ -24,6 +24,15 @@ function(gin_perf_target_includes target_name)
     )
 endfunction()
 
+function(gin_perf_target_compile_options target_name category_dir)
+    if(category_dir STREQUAL "throughput")
+        target_compile_options(${target_name}
+            PRIVATE
+            "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-maxrregcount=60>"
+        )
+    endif()
+endfunction()
+
 function(add_gin_perf_category category_dir)
     set(category_path ${CMAKE_CURRENT_SOURCE_DIR}/${category_dir})
     if(NOT EXISTS ${category_path})
@@ -42,6 +51,7 @@ function(add_gin_perf_category category_dir)
     set(tests_lib ginPerf${category_dir})
     add_library(${tests_lib} STATIC ${test_sources})
     gin_perf_target_includes(${tests_lib})
+    gin_perf_target_compile_options(${tests_lib} ${category_dir})
     target_link_libraries(${tests_lib}
         PRIVATE
         nccl_tests_options
@@ -61,6 +71,8 @@ function(add_gin_perf_category category_dir)
             ${CMAKE_CURRENT_SOURCE_DIR}/utils/args.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/utils/gin_context.cc
         )
+
+        gin_perf_target_compile_options(${target_name} ${category_dir})
 
         set_target_properties(${target_name} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/device_api/gin/${category_dir}
