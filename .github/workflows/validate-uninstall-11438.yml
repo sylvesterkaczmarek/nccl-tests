@@ -1,0 +1,99 @@
+name: Validate uninstall Docker recovery
+on:
+  push:
+    branches: [work/prepare-nvidia-pair-137-1795]
+    paths: [.github/workflows/validate-uninstall-11438.yml, secondary/**]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: helper
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+      - name: Prepare the pinned upstream checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          test "$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          git init -q NemoClaw
+          git -C NemoClaw remote add origin https://github.com/NVIDIA/NemoClaw.git
+          git -C NemoClaw fetch -q --depth=1 origin main
+          git -C NemoClaw switch -c fix-uninstall-docker-recovery-11438 origin/main
+          test "$(git -C NemoClaw rev-parse HEAD)" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          git -C NemoClaw config user.name 'Sylvester Kaczmarek'
+          git -C NemoClaw config user.email '16242628+sylvesterkaczmarek@users.noreply.github.com'
+      - name: Set up the repository-owned validation tools
+        run: |
+          set -o pipefail
+          cd NemoClaw
+          npm run dev:setup 2>&1 | tee ../artifacts/setup.log
+      - name: Prove the new tests fail before the change
+        run: |
+          cd NemoClaw
+          git apply --include='*test.ts' ../helper/secondary/NemoClaw-11438.patch
+          set +e
+          node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts -t '#11438' --reporter=default --reporter=junit --outputFile.junit=../artifacts/baseline.xml > ../artifacts/baseline.log 2>&1
+          status=$?
+          set -e
+          cat ../artifacts/baseline.log
+          test "$status" = 1
+          python3 - <<'PY'
+          from xml.etree import ElementTree as ET
+          root = ET.parse('../artifacts/baseline.xml').getroot()
+          assert not list(root.iter('error'))
+          assert len(list(root.iter('failure'))) >= 3
+          PY
+      - name: Apply and format the production change
+        run: |
+          cd NemoClaw
+          git apply --exclude='*test.ts' ../helper/secondary/NemoClaw-11438.patch
+          node_modules/.bin/oxfmt src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+          git diff --check
+      - name: Run all uninstall unit tests and the gateway removal tests
+        run: |
+          set -o pipefail
+          cd NemoClaw
+          node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/ src/lib/onboard/gateway-teardown-authority.test.ts src/lib/uninstall-command.test.ts --reporter=default --reporter=junit --outputFile.junit=../artifacts/tests.xml 2>&1 | tee ../artifacts/tests.log
+      - name: Commit and run the unchanged repository validation gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd NemoClaw
+          test "$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          git fetch -q --depth=1 origin main
+          test "$(git rev-parse origin/main)" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          test "$(git diff --name-only | wc -l)" = 2
+          git diff --exit-code origin/main -- package.json package-lock.json .pre-commit-config.yaml commitlint.config.js scripts tools test/helpers
+          git add src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+          git commit -s -m 'fix(uninstall): report Docker recovery before retaining state' 2>&1 | tee ../artifacts/commit.log
+          npm run validate:pr 2>&1 | tee ../artifacts/validate-pr.log
+          test -z "$(git status --porcelain)"
+      - name: Export the tested candidate
+        if: always()
+        run: |
+          cd NemoClaw
+          git diff origin/main > ../artifacts/NemoClaw-11438.patch
+          git diff origin/main --stat > ../artifacts/diff-stat.txt
+          git rev-parse origin/main > ../artifacts/base.txt
+          git rev-parse HEAD > ../artifacts/tested-commit.txt
+          cp src/lib/actions/uninstall/run-plan.ts ../artifacts/run-plan.ts
+          cp src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts ../artifacts/run-plan-gateway-segregation.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validated-uninstall-docker-recovery-11438
+          path: artifacts/
+          retention-days: 7
