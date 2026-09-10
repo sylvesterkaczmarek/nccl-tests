@@ -1,0 +1,107 @@
+name: Validate DCGM incident code preservation
+on:
+  push:
+    branches: [work/prepare-nvidia-pair-137-1795]
+    paths: [.github/workflows/validate-dcgm-codes.yml, validation/**]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: helper
+          persist-credentials: false
+      - name: Fetch pinned sources and tool versions
+        id: versions
+        run: |
+          set -euo pipefail
+          git init -q NVSentinel
+          git -C NVSentinel fetch -q --depth=1 https://github.com/NVIDIA/NVSentinel.git 8f37daca53e38f6b89a6b236781f67f13837f71e
+          git -C NVSentinel checkout -q --detach FETCH_HEAD
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import os, yaml
+          v = yaml.safe_load(open('NVSentinel/.versions.yaml'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print('python=' + v['languages']['python'], file=out)
+              print('poetry=' + v['build_tools']['poetry'], file=out)
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.versions.outputs.python }}
+      - name: Install locked module dependencies
+        run: |
+          python -m pip install 'poetry==${{ steps.versions.outputs.poetry }}'
+          cd NVSentinel/health-monitors/gpu-health-monitor
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+      - name: Reproduce the lost-code failure
+        run: |
+          mkdir artifacts
+          cp helper/validation/test_multiple_incident_codes.py NVSentinel/health-monitors/gpu-health-monitor/gpu_health_monitor/tests/
+          cd NVSentinel/health-monitors/gpu-health-monitor
+          set +e
+          poetry run pytest -q gpu_health_monitor/tests/test_multiple_incident_codes.py --junitxml=../../../artifacts/baseline.xml > ../../../artifacts/baseline.log 2>&1
+          result=$?
+          set -e
+          cat ../../../artifacts/baseline.log
+          test "$result" = 1
+          python - <<'PY'
+          from xml.etree import ElementTree as ET
+          root = ET.parse('../../../artifacts/baseline.xml').getroot()
+          cases = list(root.iter('testcase'))
+          assert len(cases) == 11, len(cases)
+          assert not list(root.iter('error'))
+          assert len(list(root.iter('failure'))) == 7
+          PY
+      - name: Apply and format the correction
+        run: |
+          python helper/validation/fix_dcgm.py
+          cd NVSentinel
+          git add -N health-monitors/gpu-health-monitor/gpu_health_monitor/tests/test_multiple_incident_codes.py
+          cd health-monitors/gpu-health-monitor
+          poetry run black gpu_health_monitor/dcgm_watcher/dcgm.py gpu_health_monitor/dcgm_watcher/types.py gpu_health_monitor/platform_connector/platform_connector.py gpu_health_monitor/tests/test_dcgm_watcher/test_dcgm.py gpu_health_monitor/tests/test_platform_connector/test_platform_connector.py gpu_health_monitor/tests/test_multiple_incident_codes.py
+      - name: Run the full GPU health monitor gate
+        run: |
+          set -o pipefail
+          make -C NVSentinel/health-monitors/gpu-health-monitor lint-test 2>&1 | tee artifacts/module-gate.log
+          cp NVSentinel/health-monitors/gpu-health-monitor/report.xml artifacts/
+      - name: Attempt the repository-wide gate
+        id: repository_gate
+        continue-on-error: true
+        timeout-minutes: 4
+        run: |
+          set -o pipefail
+          make -C NVSentinel lint-test-all 2>&1 | tee artifacts/repository-gate.log
+      - name: Export the exact validated patch
+        if: always()
+        run: |
+          git -C NVSentinel diff --check
+          git -C NVSentinel diff > artifacts/NVSentinel-1795.patch
+          git -C NVSentinel diff --stat > artifacts/diff-stat.txt
+          git -C NVSentinel rev-parse HEAD > artifacts/base.txt
+          printf '%s\n' '${{ steps.repository_gate.outcome }}' > artifacts/repository-gate-outcome.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validated-dcgm-codes-1795
+          path: artifacts/
+          retention-days: 7
+  second-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch the current Spark source for the independent second fix
+        run: |
+          git init -q cudf-spark
+          git -C cudf-spark fetch -q --depth=1 https://github.com/NVIDIA/cudf-spark.git 31db6361829e8cbd258be94eda2842b667aef048
+          git -C cudf-spark checkout -q --detach FETCH_HEAD
+          git -C cudf-spark archive --format=tar.gz --prefix=cudf-spark/ HEAD > cudf-spark.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cudf-spark-pinned-source
+          path: cudf-spark.tar.gz
+          retention-days: 3
