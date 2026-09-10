@@ -1,0 +1,22 @@
+name: Prepare uninstall regression source
+on:
+  push:
+    branches: [work/prepare-nvidia-pair-137-1795]
+    paths: [.github/workflows/snapshot-nemoclaw.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          git init -q NemoClaw
+          git -C NemoClaw fetch -q --depth=1 https://github.com/NVIDIA/NemoClaw.git 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          git -C NemoClaw checkout -q --detach FETCH_HEAD
+          git -C NemoClaw archive --format=tar.gz --prefix=NemoClaw/ HEAD > NemoClaw.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NemoClaw-uninstall-source
+          path: NemoClaw.tar.gz
+          retention-days: 3
