@@ -1,0 +1,32 @@
+name: Stop superseded uninstall validation
+on:
+  push:
+    branches: [work/prepare-nvidia-pair-137-1795]
+    paths: [.github/workflows/stop-duplicate-uninstall-review.yml]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  stop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Stop only the owned duplicate candidate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+          repo = 'sylvesterkaczmarek/nccl-tests'
+          run_id = 34532757199
+          endpoint = f'repos/{repo}/actions/runs/{run_id}'
+          run = json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True))
+          assert run['repository']['full_name'] == repo
+          assert run['head_sha'] == '39be67ba054071161bae7ca62a215e2283e13d7c'
+          assert run['path'] == '.github/workflows/validate-uninstall-11438.yml'
+          if run['status'] == 'completed':
+              print('Validation already completed:', run['conclusion'])
+          else:
+              subprocess.run(['gh', 'api', '--method', 'POST', endpoint + '/cancel'], check=True)
+              print('Stopped duplicate candidate validation; NVIDIA/NemoClaw#11474 already addresses #11438.')
+          PY
