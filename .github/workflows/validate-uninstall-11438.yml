@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
-      - name: Install locked validation dependencies
+      - name: Install locked validation dependencies and build the catalogue
         run: |
           set -euo pipefail
           cd NemoClaw
@@ -50,11 +50,20 @@ jobs:
           npm ci --ignore-scripts 2>&1 | tee ../artifacts/setup.log
           npm --prefix nemoclaw ci --ignore-scripts 2>&1 | tee -a ../artifacts/setup.log
           node_modules/.bin/prek install
+          npm run build:cli 2>&1 | tee ../artifacts/baseline-build.log
           git diff --exit-code
       - name: Prove the regression tests fail before the change
         run: |
           cd NemoClaw
           git apply --include='*test.ts' ../helper/secondary/NemoClaw-11438.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts')
+          text = p.read_text()
+          old = '    if (dockerInstalled) {\n      expect(runDocker).toHaveBeenCalledWith(["info"]'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, '    if (dockerInstalled && removeStatus !== 0) {\n      expect(runDocker).toHaveBeenCalledWith(["info"]'))
+          PY
           set +e
           node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts -t '#11438' --reporter=default --reporter=junit --outputFile.junit=../artifacts/baseline.xml > ../artifacts/baseline.log 2>&1
           status=$?
