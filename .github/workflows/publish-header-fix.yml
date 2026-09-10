@@ -1,0 +1,59 @@
+name: Publish validated communicator header fix
+on:
+  push:
+    branches: [workflows/publish-nccl-header-395]
+    paths: [.github/workflows/publish-header-fix.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.repository == 'sylvesterkaczmarek/nccl-tests'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: b4d5beebca8a76cf01335f724d154b9b9d394d96
+          fetch-depth: 1
+      - name: Apply and publish only the validated source change
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/sylvesterkaczmarek/nccl-tests --jq '.parent.full_name')" = 'NVIDIA/nccl-tests'
+          test "$(git rev-parse HEAD)" = b4d5beebca8a76cf01335f724d154b9b9d394d96
+          test -z "$(git status --porcelain)"
+          git switch -c fix-comm-ops-curand-header-395
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/comm_ops.cu')
+          text = p.read_text()
+          assert text.count('#include <curand.h>\n') == 1
+          p.write_text(text.replace('#include <curand.h>\n', '#include <math.h>\n'))
+          PY
+          test "$(git hash-object src/comm_ops.cu)" = ec6b9da893fad3818c0f08e87d6aefa4aa23bb44
+          test "$(git diff --name-only)" = src/comm_ops.cu
+          git diff --check
+          mkdir -p /tmp/nccl-no-curand
+          printf '#error unexpected cuRAND dependency\n' > /tmp/nccl-no-curand/curand.h
+          git show HEAD:src/comm_ops.cu > /tmp/nccl-original.cu
+          if g++ -std=c++17 -I/tmp/nccl-no-curand -x c++ /tmp/nccl-original.cu -o /tmp/nccl-original > /tmp/nccl-original.log 2>&1; then
+            echo 'Original source unexpectedly compiled'; exit 1
+          fi
+          grep 'unexpected cuRAND dependency' /tmp/nccl-original.log
+          g++ -std=c++17 -I/tmp/nccl-no-curand -x c++ src/comm_ops.cu -o /tmp/nccl-fixed
+          set +e
+          /tmp/nccl-fixed > /tmp/nccl-fixed.log
+          result=$?
+          set -e
+          test "$result" = 1
+          grep -Fx 'This test requires MPI support, but was compiled without it.' /tmp/nccl-fixed.log
+          git config user.name 'Sylvester Kaczmarek'
+          git config user.email '16242628+sylvesterkaczmarek@users.noreply.github.com'
+          git add src/comm_ops.cu
+          git commit -s -m 'fix: replace unused cuRAND header with math.h'
+          test "$(git diff --name-only HEAD^)" = src/comm_ops.cu
+          git remote -v
+          test "$(git remote get-url origin)" = 'https://github.com/sylvesterkaczmarek/nccl-tests'
+          git push origin HEAD:refs/heads/fix-comm-ops-curand-header-395
+          git show --stat --oneline HEAD
