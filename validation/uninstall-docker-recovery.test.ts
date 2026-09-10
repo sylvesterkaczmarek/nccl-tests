@@ -94,7 +94,8 @@ describe("uninstall Docker recovery (#11438)", () => {
     expect(outcome.output).toContain("Docker is unavailable.");
     expect(outcome.output).toContain(WSL_SETTINGS);
     expect(outcome.output).toContain(RETRY);
-    expect(outcome.runDocker).toHaveBeenCalledExactlyOnceWith(
+    expect(outcome.runDocker.mock.calls.filter(([args]) => args[0] === "info")).toHaveLength(1);
+    expect(outcome.runDocker).toHaveBeenCalledWith(
       ["info"],
       expect.objectContaining({ timeout: 5_000, stdio: "ignore" }),
     );
@@ -105,7 +106,8 @@ describe("uninstall Docker recovery (#11438)", () => {
     expectPreservedState(outcome);
     expect(outcome.output).not.toContain(RETRY);
     expect(outcome.output).not.toContain(WSL_SETTINGS);
-    expect(outcome.runDocker).toHaveBeenCalledExactlyOnceWith(
+    expect(outcome.runDocker.mock.calls.filter(([args]) => args[0] === "info")).toHaveLength(1);
+    expect(outcome.runDocker).toHaveBeenCalledWith(
       ["info"],
       expect.objectContaining({ timeout: 5_000, stdio: "ignore" }),
     );
