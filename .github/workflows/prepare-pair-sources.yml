@@ -1,0 +1,34 @@
+name: Prepare pinned regression sources
+on:
+  push:
+    branches: [work/prepare-nvidia-pair-137-1795]
+    paths: [.github/workflows/prepare-pair-sources.yml]
+permissions:
+  contents: read
+jobs:
+  snapshots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - name: Download the two public source revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          for entry in 'NVSentinel 8f37daca53e38f6b89a6b236781f67f13837f71e' 'SkillEvaluator 104ccb7013b2488f761f4d132b4f226a66ed44a8'; do
+            read -r repo sha <<< "$entry"
+            git init -q "$repo"
+            git -C "$repo" fetch -q --depth=1 "https://github.com/NVIDIA/$repo.git" "$sha"
+            git -C "$repo" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$repo" rev-parse HEAD)" = "$sha"
+            git -C "$repo" archive --format=tar.gz --prefix="$repo/" HEAD > "artifacts/$repo.tar.gz"
+            printf '%s %s\n' "$repo" "$sha" >> artifacts/revisions.txt
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nvidia-regression-sources-137-1795
+          path: artifacts/
+          retention-days: 3
+          if-no-files-found: error
