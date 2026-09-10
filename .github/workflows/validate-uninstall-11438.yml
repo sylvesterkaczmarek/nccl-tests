@@ -12,6 +12,7 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       GIT_LFS_SKIP_SMUDGE: '1'
+      BASE_SHA: b12af73e32becb90275b6fc392f0d2c3d8f186a5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,12 +27,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir artifacts
-          test "$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          observed=$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')
+          printf 'Canonical base: %s\n' "$observed"
+          test "$observed" = "$BASE_SHA"
           git init -q NemoClaw
           git -C NemoClaw remote add origin https://github.com/NVIDIA/NemoClaw.git
           git -C NemoClaw fetch -q --depth=1 origin main
           git -C NemoClaw switch -c fix-uninstall-docker-recovery-11438 origin/main
-          test "$(git -C NemoClaw rev-parse HEAD)" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          test "$(git -C NemoClaw rev-parse HEAD)" = "$BASE_SHA"
           git -C NemoClaw config user.name 'Sylvester Kaczmarek'
           git -C NemoClaw config user.email '16242628+sylvesterkaczmarek@users.noreply.github.com'
       - name: Set up the repository-owned validation tools
@@ -72,9 +75,11 @@ jobs:
         run: |
           set -euo pipefail
           cd NemoClaw
-          test "$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          observed=$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')
+          printf 'Canonical base: %s\n' "$observed"
+          test "$observed" = "$BASE_SHA"
           git fetch -q --depth=1 origin main
-          test "$(git rev-parse origin/main)" = 95e578095c6cf99d400f25768e7f862c7b6ccd49
+          test "$(git rev-parse origin/main)" = "$BASE_SHA"
           test "$(git diff --name-only | wc -l)" = 2
           git diff --exit-code origin/main -- package.json package-lock.json .pre-commit-config.yaml commitlint.config.js scripts tools test/helpers
           git add src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
@@ -84,13 +89,15 @@ jobs:
       - name: Export the tested candidate
         if: always()
         run: |
-          cd NemoClaw
-          git diff origin/main > ../artifacts/NemoClaw-11438.patch
-          git diff origin/main --stat > ../artifacts/diff-stat.txt
-          git rev-parse origin/main > ../artifacts/base.txt
-          git rev-parse HEAD > ../artifacts/tested-commit.txt
-          cp src/lib/actions/uninstall/run-plan.ts ../artifacts/run-plan.ts
-          cp src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts ../artifacts/run-plan-gateway-segregation.test.ts
+          if test -d NemoClaw/.git; then
+            cd NemoClaw
+            git diff origin/main > ../artifacts/NemoClaw-11438.patch
+            git diff origin/main --stat > ../artifacts/diff-stat.txt
+            git rev-parse origin/main > ../artifacts/base.txt
+            git rev-parse HEAD > ../artifacts/tested-commit.txt
+            cp src/lib/actions/uninstall/run-plan.ts ../artifacts/run-plan.ts
+            cp src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts ../artifacts/run-plan-gateway-segregation.test.ts
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
