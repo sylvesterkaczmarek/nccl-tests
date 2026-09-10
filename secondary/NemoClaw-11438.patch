@@ -1,0 +1,109 @@
+diff --git a/src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts b/src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+index 3d36f50..bc97f73 100644
+--- a/src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
++++ b/src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+@@ -442,6 +442,68 @@ describe("uninstall gateway-port segregation (#3053)", () => {
+     },
+   );
+ 
++  it.each([
++    { name: "missing Docker", dockerInstalled: false, dockerStatus: 0, removeStatus: 1 },
++    { name: "an unreachable Docker daemon", dockerInstalled: true, dockerStatus: 1, removeStatus: 1 },
++    { name: "a timed-out Docker probe", dockerInstalled: true, dockerStatus: null, removeStatus: 1 },
++    { name: "a healthy Docker daemon", dockerInstalled: true, dockerStatus: 0, removeStatus: 1 },
++    { name: "successful registration removal", dockerInstalled: false, dockerStatus: 0, removeStatus: 0 },
++  ])("reports recovery without discarding state for $name (#11438)", ({ dockerInstalled, dockerStatus, removeStatus }) => {
++    const warnings: string[] = [];
++    const logs: string[] = [];
++    const rmSync = vi.fn();
++    const runDocker = vi.fn((args: string[]) =>
++      args[0] === "info"
++        ? { status: dockerStatus, stdout: "ACCESS_TOKEN=must-not-be-logged", stderr: "secret-token" }
++        : ok(),
++    );
++    const run = vi.fn((command: string, args: string[]) => {
++      if (command !== "openshell") return ok();
++      if (args[0] === "gateway" && args[1] === "list") {
++        return ok(JSON.stringify([{ name: "nemoclaw" }]));
++      }
++      if (args[0] === "gateway" && args[1] === "remove") {
++        return { status: removeStatus, stdout: "", stderr: "" };
++      }
++      return ok();
++    });
++    const result = runUninstallPlan(
++      { assumeYes: true, deleteModels: false, keepOpenShell: true },
++      {
++        commandExists: (command) => command !== "pgrep" && (command !== "docker" || dockerInstalled),
++        env: { HOME: STATIC_TEST_HOME, TMPDIR: "/tmp/test" } as NodeJS.ProcessEnv,
++        error: (line) => warnings.push(line),
++        existsSync: () => false,
++        isTty: false,
++        log: (line) => logs.push(line),
++        rmSync,
++        run,
++        runDocker,
++      },
++    );
++    expect(result.exitCode).toBe(removeStatus);
++    const output = warnings.join("\n");
++    const needsDockerRecovery = removeStatus !== 0 && (!dockerInstalled || dockerStatus !== 0);
++    expect(output.includes("After 'docker info' succeeds, rerun 'nemoclaw uninstall' with the same options.")).toBe(needsDockerRecovery);
++    expect(output.includes("Docker Desktop > Settings > Resources > WSL integration")).toBe(needsDockerRecovery);
++    expect(output).not.toContain("must-not-be-logged");
++    expect(output).not.toContain("secret-token");
++    if (needsDockerRecovery) {
++      expect(output).toContain(dockerInstalled ? "Docker is unavailable." : "docker command not found.");
++    }
++    if (removeStatus !== 0) {
++      expect(output).toContain("openshell gateway remove failed (exit 1).");
++      expect(rmSync).not.toHaveBeenCalled();
++      expect(logs).not.toContain("[3/6] NemoClaw CLI");
++      expect(run.mock.calls.some(([command, args]) => command === "openshell" && args[1] === "destroy")).toBe(false);
++    }
++    const probes = runDocker.mock.calls.filter(([args]) => args[0] === "info");
++    expect(probes).toHaveLength(dockerInstalled ? 1 : 0);
++    if (dockerInstalled) {
++      expect(runDocker).toHaveBeenCalledWith(["info"], expect.objectContaining({ timeout: 5_000, stdio: "ignore" }));
++    }
++  });
++
+   it("preserves the gateways/ subtree so uninstalling one environment leaves the others", () => {
+     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-gwpreserve-"));
+     try {
+diff --git a/src/lib/actions/uninstall/run-plan.ts b/src/lib/actions/uninstall/run-plan.ts
+index 6e9a962..0a7c1ef 100644
+--- a/src/lib/actions/uninstall/run-plan.ts
++++ b/src/lib/actions/uninstall/run-plan.ts
+@@ -75,6 +75,7 @@ import {
+   stopHostGatewayProcesses,
+ } from "../../onboard/host-gateway-process";
+ import { isModelRouterCommandLineForPort } from "../../onboard/model-router-process";
++import { DOCKER_DESKTOP_WSL_INTEGRATION_HINT } from "../../onboard/preflight";
+ import {
+   assertGatewayStatePathSafe,
+   GATEWAYS_SUBDIR,
+@@ -945,6 +946,23 @@ function removeGatewayRegistration(
+       stderr: outcome.result.stderr ?? "",
+     }),
+   );
++  if (allowLegacyDestroy) {
++    const dockerInstalled = runtime.commandExists("docker");
++    const dockerReachable =
++      dockerInstalled &&
++      runtime.runDocker(["info"], { env: runtime.env, stdio: "ignore", timeout: 5_000 }).status === 0;
++    if (!dockerReachable) {
++      runtime.warn(
++        dockerInstalled
++          ? "Docker is unavailable. Start Docker and check this user's access to its daemon."
++          : "docker command not found. Install Docker or restore it to PATH.",
++      );
++      runtime.warn(DOCKER_DESKTOP_WSL_INTEGRATION_HINT);
++      runtime.warn(
++        `After 'docker info' succeeds, rerun '${runtimeBranding(runtime).cli} uninstall' with the same options. Remaining state is preserved for retry.`,
++      );
++    }
++  }
+   return false;
+ }
+ 
