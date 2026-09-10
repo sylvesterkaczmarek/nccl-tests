@@ -2,7 +2,7 @@ name: Validate uninstall Docker recovery
 on:
   push:
     branches: [work/prepare-nvidia-pair-137-1795]
-    paths: [.github/workflows/validate-uninstall-11438.yml, secondary/**]
+    paths: [.github/workflows/validate-uninstall-11438.yml, validation/uninstall-docker-recovery.test.ts]
 permissions:
   contents: read
 jobs:
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
-      - name: Install locked validation dependencies and build the catalogue
+      - name: Install locked dependencies and build the catalogue
         run: |
           set -euo pipefail
           cd NemoClaw
@@ -52,20 +52,14 @@ jobs:
           node_modules/.bin/prek install
           npm run build:cli 2>&1 | tee ../artifacts/baseline-build.log
           git diff --exit-code
-      - name: Prove the regression tests fail before the change
+      - name: Prove the focused regressions fail before the change
         run: |
           cd NemoClaw
-          git apply --include='*test.ts' ../helper/secondary/NemoClaw-11438.patch
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts')
-          text = p.read_text()
-          old = '    if (dockerInstalled) {\n      expect(runDocker).toHaveBeenCalledWith(["info"]'
-          assert text.count(old) == 1
-          p.write_text(text.replace(old, '    if (dockerInstalled && removeStatus !== 0) {\n      expect(runDocker).toHaveBeenCalledWith(["info"]'))
-          PY
+          test ! -e src/lib/actions/uninstall/run-plan-docker-recovery.test.ts
+          cp ../helper/validation/uninstall-docker-recovery.test.ts src/lib/actions/uninstall/run-plan-docker-recovery.test.ts
+          git add -N src/lib/actions/uninstall/run-plan-docker-recovery.test.ts
           set +e
-          node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts -t '#11438' --reporter=default --reporter=junit --outputFile.junit=../artifacts/baseline.xml > ../artifacts/baseline.log 2>&1
+          node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/run-plan-docker-recovery.test.ts --reporter=default --reporter=junit --outputFile.junit=../artifacts/baseline.xml > ../artifacts/baseline.log 2>&1
           status=$?
           set -e
           cat ../artifacts/baseline.log
@@ -75,12 +69,23 @@ jobs:
           root = ET.parse('../artifacts/baseline.xml').getroot()
           assert not list(root.iter('error'))
           assert len(list(root.iter('failure'))) >= 3
+          assert len(list(root.iter('testcase'))) == 6
           PY
       - name: Apply and format the production change
         run: |
           cd NemoClaw
           git apply --exclude='*test.ts' ../helper/secondary/NemoClaw-11438.patch
-          node_modules/.bin/oxfmt src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lib/actions/uninstall/run-plan.ts')
+          text = p.read_text()
+          imported = 'import { DOCKER_DESKTOP_WSL_INTEGRATION_HINT } from "../../onboard/preflight";\n'
+          use = '      runtime.warn(DOCKER_DESKTOP_WSL_INTEGRATION_HINT);'
+          assert text.count(imported) == 1 and text.count(use) == 1
+          text = text.replace(imported, '').replace(use, '      runtime.warn(\n        "If you use Docker Desktop from WSL, open Docker Desktop > Settings > Resources > WSL integration and enable integration for this distro.",\n      );')
+          p.write_text(text)
+          PY
+          node_modules/.bin/oxfmt src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-docker-recovery.test.ts
           git diff --check
       - name: Run uninstall and gateway removal tests
         run: |
@@ -107,7 +112,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$BASE_SHA"
           test "$(git diff --name-only | wc -l)" = 2
           git diff --exit-code origin/main -- package.json package-lock.json .pre-commit-config.yaml commitlint.config.js scripts tools test/helpers
-          git add src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
+          git add src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-docker-recovery.test.ts
           git commit -s -m 'fix(uninstall): report Docker recovery before retaining state' 2>&1 | tee ../artifacts/commit.log
           npm run validate:pr 2>&1 | tee ../artifacts/validate-pr.log
           test -z "$(git status --porcelain)"
@@ -119,8 +124,9 @@ jobs:
             git diff "$BASE_SHA" > ../artifacts/NemoClaw-11438.patch
             git diff "$BASE_SHA" --stat > ../artifacts/diff-stat.txt
             git rev-parse HEAD > ../artifacts/tested-commit.txt
+            git rev-parse HEAD^{tree} > ../artifacts/tested-tree.txt
             cp src/lib/actions/uninstall/run-plan.ts ../artifacts/run-plan.ts
-            cp src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts ../artifacts/run-plan-gateway-segregation.test.ts
+            cp src/lib/actions/uninstall/run-plan-docker-recovery.test.ts ../artifacts/run-plan-docker-recovery.test.ts
           fi
       - uses: actions/upload-artifact@v4
         if: always()
