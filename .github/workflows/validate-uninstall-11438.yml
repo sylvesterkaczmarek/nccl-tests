@@ -12,37 +12,46 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       GIT_LFS_SKIP_SMUDGE: '1'
-      BASE_SHA: b12af73e32becb90275b6fc392f0d2c3d8f186a5
     steps:
       - uses: actions/checkout@v4
         with:
           path: helper
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.2'
-      - name: Prepare the pinned upstream checkout
+      - name: Resolve the canonical upstream base
+        id: base
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha=$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BASE_SHA=$sha" >> "$GITHUB_ENV"
           mkdir artifacts
-          observed=$(gh api repos/NVIDIA/NemoClaw/git/ref/heads/main --jq '.object.sha')
-          printf 'Canonical base: %s\n' "$observed"
-          test "$observed" = "$BASE_SHA"
-          git init -q NemoClaw
-          git -C NemoClaw remote add origin https://github.com/NVIDIA/NemoClaw.git
-          git -C NemoClaw fetch -q --depth=1 origin main
-          git -C NemoClaw switch -c fix-uninstall-docker-recovery-11438 origin/main
-          test "$(git -C NemoClaw rev-parse HEAD)" = "$BASE_SHA"
-          git -C NemoClaw config user.name 'Sylvester Kaczmarek'
-          git -C NemoClaw config user.email '16242628+sylvesterkaczmarek@users.noreply.github.com'
-      - name: Set up the repository-owned validation tools
+          printf '%s\n' "$sha" > artifacts/base.txt
+      - uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/NemoClaw
+          ref: ${{ steps.base.outputs.sha }}
+          path: NemoClaw
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+      - name: Install locked validation dependencies
         run: |
-          set -o pipefail
+          set -euo pipefail
           cd NemoClaw
-          npm run dev:setup 2>&1 | tee ../artifacts/setup.log
-      - name: Prove the new tests fail before the change
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git update-ref refs/remotes/origin/main "$BASE_SHA"
+          git switch -c fix-uninstall-docker-recovery-11438
+          git config user.name 'Sylvester Kaczmarek'
+          git config user.email '16242628+sylvesterkaczmarek@users.noreply.github.com'
+          npm ci --ignore-scripts 2>&1 | tee ../artifacts/setup.log
+          npm --prefix nemoclaw ci --ignore-scripts 2>&1 | tee -a ../artifacts/setup.log
+          node_modules/.bin/prek install
+          git diff --exit-code
+      - name: Prove the regression tests fail before the change
         run: |
           cd NemoClaw
           git apply --include='*test.ts' ../helper/secondary/NemoClaw-11438.patch
@@ -64,12 +73,19 @@ jobs:
           git apply --exclude='*test.ts' ../helper/secondary/NemoClaw-11438.patch
           node_modules/.bin/oxfmt src/lib/actions/uninstall/run-plan.ts src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts
           git diff --check
-      - name: Run all uninstall unit tests and the gateway removal tests
+      - name: Run uninstall and gateway removal tests
         run: |
           set -o pipefail
           cd NemoClaw
           node_modules/.bin/vitest run --project cli src/lib/actions/uninstall/ src/lib/onboard/gateway-teardown-authority.test.ts src/lib/uninstall-command.test.ts --reporter=default --reporter=junit --outputFile.junit=../artifacts/tests.xml 2>&1 | tee ../artifacts/tests.log
-      - name: Commit and run the unchanged repository validation gate
+      - name: Build and type-check
+        run: |
+          set -euo pipefail
+          cd NemoClaw
+          npm run build:cli 2>&1 | tee ../artifacts/build.log
+          npm --prefix nemoclaw run build 2>&1 | tee -a ../artifacts/build.log
+          npm run typecheck:cli 2>&1 | tee ../artifacts/typecheck.log
+      - name: Check the trusted base and run repository validation
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -86,14 +102,13 @@ jobs:
           git commit -s -m 'fix(uninstall): report Docker recovery before retaining state' 2>&1 | tee ../artifacts/commit.log
           npm run validate:pr 2>&1 | tee ../artifacts/validate-pr.log
           test -z "$(git status --porcelain)"
-      - name: Export the tested candidate
+      - name: Export the candidate and results
         if: always()
         run: |
           if test -d NemoClaw/.git; then
             cd NemoClaw
-            git diff origin/main > ../artifacts/NemoClaw-11438.patch
-            git diff origin/main --stat > ../artifacts/diff-stat.txt
-            git rev-parse origin/main > ../artifacts/base.txt
+            git diff "$BASE_SHA" > ../artifacts/NemoClaw-11438.patch
+            git diff "$BASE_SHA" --stat > ../artifacts/diff-stat.txt
             git rev-parse HEAD > ../artifacts/tested-commit.txt
             cp src/lib/actions/uninstall/run-plan.ts ../artifacts/run-plan.ts
             cp src/lib/actions/uninstall/run-plan-gateway-segregation.test.ts ../artifacts/run-plan-gateway-segregation.test.ts
